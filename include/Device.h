@@ -7,7 +7,6 @@
 #include "MQTTManagerClass.h"
 #include "WiFiManagerClass.h"
 #include "TimeManagerClass.h"
-#include "Telemetry.h"
 #include "config.h"
 
 class Device {
