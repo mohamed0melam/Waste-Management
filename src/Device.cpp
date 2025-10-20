@@ -107,71 +107,81 @@ void Device::publishTelemetry(float measuredDistance) {
   float bh = _config.getBinHeightCm();
   if (bh <= 0.0f) bh = BIN_HEIGHT_CM;
 
-    // compute bin-level as percentage and (optionally) volume when width/length known
-  float binLevelPercent = -1.0f;
-  float binFillVolumeLiters = -1.0f; // filled volume in liters (if width & length provided)
-  float binTotalVolumeLiters = -1.0f; // total bin volume in liters
-
-  if (measuredDistance >= 0.0f && bh > 0.0f) {
-    // filledHeight = how many cm of the bin are occupied by rubbish
-    float filledHeight = bh - measuredDistance;
-
-    if (filledHeight <= 0.0f) {
-      binLevelPercent = 0.0f;
-    } else if (filledHeight >= bh) {
-      binLevelPercent = 100.0f;
-    } else {
-      // percent by height (0..100)
-      binLevelPercent = (filledHeight / bh) * 100.0f;
-    }
-
-    // if width and length known, compute volumes (cm^3 -> liters)
-    float bw = _config.getBinWidthCm();
-    float bl = _config.getBinLengthCm();
-    if (bw > 0.0f && bl > 0.0f) {
-      // total volume in cubic centimeters
-      float totalVolumeCm3 = bh * bw * bl;
-      // filled volume in cubic centimeters:
-      float filledVolumeCm3 = 0.0f;
-      if (filledHeight > 0.0f) filledVolumeCm3 = filledHeight * bw * bl;
-
-      // convert to liters (1000 cm^3 = 1 liter)
-      binTotalVolumeLiters = totalVolumeCm3 / 1000.0f;
-      binFillVolumeLiters  = filledVolumeCm3 / 1000.0f;
-    }
-  }
-
-
   StaticJsonDocument<768> doc;
   doc["_id"] = String("DEVICE_") + String((uint64_t)millis() + esp_random());
   doc["Location"] = String(DEVICE_ID);
   doc["timestamp"] = TimeManager.getTimestamp();
   doc["distance_cm"] = measuredDistance;
-  
-    if (binLevelPercent >= 0.0f) {
-    float p_rounded = roundf(binLevelPercent * 100.0f) / 100.0f; // 2 decimals
-    doc["BinLevelPercent"] = p_rounded;
-    doc["BinLevel"] = p_rounded; // keep backward compatibility (percent)
 
-    // attach volume info if calculated
-    if (binTotalVolumeLiters >= 0.0f) {
-      float totalL = roundf(binTotalVolumeLiters * 100.0f) / 100.0f;
-      float fillL  = roundf(binFillVolumeLiters  * 100.0f) / 100.0f;
-      doc["BinVolumeLiters"] = totalL;
-      doc["BinFillVolumeLiters"] = fillL;
-    } else {
-      // omit volume fields if not available (or set null)
-      // doc["BinVolumeLiters"] = nullptr;
-      // doc["BinFillVolumeLiters"] = nullptr;
-    }
-  } else {
-    doc["BinLevelPercent"] = nullptr;
-    doc["BinLevel"] = nullptr;
+  // --- Corrected Telemetry Calculation Block ---
+  double height_cm = (double)bh;
+  double width_cm  = (double)_config.getBinWidthCm();
+  double length_cm = (double)_config.getBinLengthCm();
+  double distance_cm = (double)measuredDistance;
+
+  // default height if invalid
+  if (height_cm <= 0.0) height_cm = 100.0;
+
+  // sensor offset correction
+  const double sensorOffsetCm = 0.0;
+  double effectiveDistance = distance_cm - sensorOffsetCm;
+  if (effectiveDistance < 0.0) effectiveDistance = 0.0;
+
+  // filled height (cm)
+  double filledHeightCm = height_cm - effectiveDistance;
+  if (filledHeightCm < 0.0) filledHeightCm = 0.0;
+  if (filledHeightCm > height_cm) filledHeightCm = height_cm;
+
+  // convert cm → m
+  double height_m = height_cm / 100.0;
+  double width_m  = width_cm / 100.0;
+  double length_m = length_cm / 100.0;
+  double filledHeight_m = filledHeightCm / 100.0;
+
+  // compute volumes in m³
+  double totalVolume_m3 = 0.0;
+  double filledVolume_m3 = 0.0;
+
+  if (width_m > 0.0 && length_m > 0.0 && height_m > 0.0) {
+    totalVolume_m3 = height_m * width_m * length_m;
+    filledVolume_m3 = filledHeight_m * width_m * length_m;
   }
+
+  // convert to liters (1 m³ = 1000 L)
+  double totalVolumeLiters = totalVolume_m3 * 1000.0;
+  double fillVolumeLiters  = filledVolume_m3 * 1000.0;
+
+  // fill percentage
+  double BinLevelPercent = 0.0;
+  if (totalVolume_m3 > 0.0)
+    BinLevelPercent = (filledVolume_m3 / totalVolume_m3) * 100.0;
+
+  // clamp percentage
+  if (BinLevelPercent < 0.0) BinLevelPercent = 0.0;
+  if (BinLevelPercent > 100.0) BinLevelPercent = 100.0;
+
+  // rounding helper
+  auto round2 = [](double v)->double {
+    return ((long)(v * 100.0 + (v >= 0 ? 0.5 : -0.5))) / 100.0;
+  };
+
+  // populate JSON
+  doc["BinLevel"] = round2(BinLevelPercent);
+  
+  // --- Prevent overflow by sending large numbers as strings ---
+  char volBuf[32];
+  snprintf(volBuf, sizeof(volBuf), "%.2f", totalVolumeLiters);
+  doc["BinVolumeLiters"] = volBuf;
+
+  snprintf(volBuf, sizeof(volBuf), "%.2f", fillVolumeLiters);
+  doc["BinFillVolumeLiters"] = volBuf;
+  // ------------------------------------------------------------
 
   doc["BinHeightCm"] = bh;
   doc["BinWidthCm"] = _config.getBinWidthCm();
   doc["BinLengthCm"] = _config.getBinLengthCm();
+  // --- End Corrected Block ---
+
   doc["counter"] = rtc_counter;
   doc["PowerMode"] = "Deep Sleep Measurement";
   doc["SSID"] = WiFi.SSID();
@@ -187,8 +197,10 @@ void Device::publishTelemetry(float measuredDistance) {
   static char payload[1024];
   size_t n = serializeJson(doc, payload, sizeof(payload));
   payload[n] = '\0';
+
   String topic = String(DEVICE_ID) + "/TELEMETRY";
   Serial.printf("[publishTelemetry] topic=%s payload_bytes=%u\n", topic.c_str(), (unsigned)n);
+  
   bool ok = _mqtt.publish(topic.c_str(), (const uint8_t*)payload, n, false);
   if (ok) {
     Serial.printf("📤 Published to %s (len=%u)\n", topic.c_str(), (unsigned)n);
