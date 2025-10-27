@@ -6,7 +6,7 @@ static Device device; // single device instance
 
 void setup() {
   Serial.begin(115200);
-  delay(1200);
+  delay(200);
   device.init();
 
   // If you prefer to perform runCycle immediately and then deep-sleep,
