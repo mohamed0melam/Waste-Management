@@ -1,4 +1,4 @@
-name: C/C++ CI
+name: PlatformIO CI
 
 on:
   push:
@@ -8,16 +8,38 @@ on:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Cache PlatformIO packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.platformio/packages
+          ~/.platformio/lib
+          ~/.platformio/.cache
+        key: ${{ runner.os }}-platformio-${{ hashFiles('**/platformio.ini') }}
+        restore-keys: |
+          ${{ runner.os }}-platformio-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install PlatformIO
+      run: pip install platformio
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip
+        restore-keys: |
+          ${{ runner.os }}-pip
+
+    - name: Build all environments
+      run: pio run
